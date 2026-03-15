@@ -4,6 +4,8 @@ A macOS menubar app that detects text selections and sends them to an LLM. Selec
 
 > **Demo project** — built as a learning exercise, not production software.
 
+![Highlight Tools popup](screenshot.png)
+
 ## What it does
 
 - Detects text selection in any app (native apps via Accessibility API, browsers via copy fallback)
