@@ -2,7 +2,7 @@
 
 A macOS menubar app that detects text selections and sends them to an LLM. Select text anywhere → a small popup appears with actions like Explain, Translate, Summarize, and Fix Grammar.
 
-> **Demo project** — built as a learning exercise, not production software.
+> **Demo project** built as a learning exercise, not production software.
 
 ![Highlight Tools popup](screenshot.png)
 
@@ -11,7 +11,7 @@ A macOS menubar app that detects text selections and sends them to an LLM. Selec
 - Detects text selection in any app (native apps via Accessibility API, browsers via copy fallback)
 - Shows a minimal floating popup just above the selection
 - Streams LLM responses inline
-- Supports Ollama (local) and any OpenAI-compatible API
+- Supports Ollama and any OpenAI-compatible API
 
 ## Requirements
 
