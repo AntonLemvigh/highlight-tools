@@ -24,23 +24,24 @@ class ActionRegistry {
 
     func reload() {
         var list: [any Action] = []
-        let settings = SettingsManager.shared
-        let iconOverrides = settings.actionIconOverrides
+        let settings        = SettingsManager.shared
+        let iconOverrides   = settings.actionIconOverrides
+        let nameOverrides   = settings.defaultActionNameOverrides
+        let promptOverrides = settings.defaultActionPromptOverrides
 
-        // Non-LLM actions
+        // Non-LLM actions (respect icon overrides)
         if settings.showNonLLMActions {
             list.append(CopyAction(icon: iconOverrides["copy"] ?? "doc.on.doc"))
             list.append(SearchAction(icon: iconOverrides["search"] ?? "magnifyingglass"))
         }
 
-        // Default LLM actions (only if enabled), applying icon overrides
+        // Default LLM actions (only if enabled), applying all user overrides
         for action in DefaultPrompts.all {
             if settings.isActionEnabled(action.id) {
-                if let overrideIcon = iconOverrides[action.id] {
-                    list.append(LLMAction(id: action.id, name: action.name, icon: overrideIcon, promptTemplate: action.promptTemplate))
-                } else {
-                    list.append(action)
-                }
+                let name   = nameOverrides[action.id]   ?? action.name
+                let icon   = iconOverrides[action.id]   ?? action.icon
+                let prompt = promptOverrides[action.id] ?? action.promptTemplate
+                list.append(LLMAction(id: action.id, name: name, icon: icon, promptTemplate: prompt))
             }
         }
 

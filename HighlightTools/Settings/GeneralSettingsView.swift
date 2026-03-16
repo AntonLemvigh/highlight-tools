@@ -1,7 +1,7 @@
 import Cocoa
 import ServiceManagement
 
-/// General settings tab: enable/disable, trigger delay, launch at login, per-app disable.
+/// General settings tab — enable/disable, trigger delay, launch at login, per-app disable.
 class GeneralSettingsView: NSView {
 
     private var enabledCheckbox: NSButton!
@@ -9,8 +9,6 @@ class GeneralSettingsView: NSView {
     private var delaySlider: NSSlider!
     private var delayLabel: NSTextField!
     private var nonLLMCheckbox: NSButton!
-
-    // Per-app disable
     private var disabledAppsTable: NSTableView!
     private var disabledApps: [DisabledAppRow] = []
 
@@ -25,90 +23,150 @@ class GeneralSettingsView: NSView {
     }
 
     private func setup() {
-        // Enabled toggle
-        enabledCheckbox = NSButton(checkboxWithTitle: "Enable Highlight Tools", target: self, action: #selector(toggleEnabled))
+
+        // ── Section: Behaviour ─────────────────────────────────────────────
+        let behaviourHeader = sectionHeader("Behaviour")
+
+        enabledCheckbox = NSButton(checkboxWithTitle: "Enable Highlight Tools",
+                                   target: self, action: #selector(toggleEnabled))
         enabledCheckbox.state = SettingsManager.shared.isEnabled ? .on : .off
 
-        // Launch at login
-        launchAtLoginCheckbox = NSButton(checkboxWithTitle: "Launch at Login", target: self, action: #selector(toggleLaunchAtLogin))
+        launchAtLoginCheckbox = NSButton(checkboxWithTitle: "Launch at Login",
+                                         target: self, action: #selector(toggleLaunchAtLogin))
         launchAtLoginCheckbox.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
 
-        // Trigger delay
-        let delayTitle = NSTextField(labelWithString: "Popup delay:")
-        delaySlider = NSSlider(value: SettingsManager.shared.triggerDelay, minValue: 0.1, maxValue: 1.0, target: self, action: #selector(delayChanged))
+        nonLLMCheckbox = NSButton(checkboxWithTitle: "Show Copy & Search actions",
+                                   target: self, action: #selector(toggleNonLLM))
+        nonLLMCheckbox.state = SettingsManager.shared.showNonLLMActions ? .on : .off
+
+        // Popup delay row
+        let delayTitle = NSTextField(labelWithString: "Popup delay")
+        delayTitle.font = .systemFont(ofSize: 13)
+        delayTitle.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+
+        delaySlider = NSSlider(value: SettingsManager.shared.triggerDelay,
+                               minValue: 0.1, maxValue: 1.0,
+                               target: self, action: #selector(delayChanged))
         delaySlider.numberOfTickMarks = 10
         delaySlider.allowsTickMarkValuesOnly = false
+        delaySlider.controlSize = .small
+
         delayLabel = NSTextField(labelWithString: String(format: "%.1fs", SettingsManager.shared.triggerDelay))
+        delayLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        delayLabel.textColor = .secondaryLabelColor
+        delayLabel.widthAnchor.constraint(equalToConstant: 32).isActive = true
 
         let delayRow = NSStackView(views: [delayTitle, delaySlider, delayLabel])
         delayRow.orientation = .horizontal
         delayRow.spacing = 8
 
-        // Show non-LLM actions
-        nonLLMCheckbox = NSButton(checkboxWithTitle: "Show Copy & Search actions", target: self, action: #selector(toggleNonLLM))
-        nonLLMCheckbox.state = SettingsManager.shared.showNonLLMActions ? .on : .off
+        let behaviourBox = groupBox(views: [enabledCheckbox, launchAtLoginCheckbox, nonLLMCheckbox, delayRow])
 
-        // ---- Per-app disable section ----
-        let appsHeader = NSTextField(labelWithString: "Disabled Apps")
-        appsHeader.font = .boldSystemFont(ofSize: 13)
-
-        let appsHint = NSTextField(labelWithString: "Highlight Tools will not activate in these apps.")
-        appsHint.font = .systemFont(ofSize: 11)
-        appsHint.textColor = .secondaryLabelColor
+        // ── Section: Disabled Apps ─────────────────────────────────────────
+        let appsHeader = sectionHeader("Disabled Apps")
+        let appsHint = hintLabel("Highlight Tools stays silent in these apps.")
 
         let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
         scrollView.borderType = .bezelBorder
-        scrollView.heightAnchor.constraint(equalToConstant: 120).isActive = true
+        scrollView.heightAnchor.constraint(equalToConstant: 130).isActive = true
 
         disabledAppsTable = NSTableView()
         disabledAppsTable.headerView = nil
-        disabledAppsTable.rowHeight = 24
+        disabledAppsTable.rowHeight = 22
+        disabledAppsTable.intercellSpacing = NSSize(width: 0, height: 1)
+        disabledAppsTable.style = .plain
 
-        let nameCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
-        nameCol.width = 200
+        let nameCol = NSTableColumn(identifier: .init("name"))
+        nameCol.width = 220
         disabledAppsTable.addTableColumn(nameCol)
 
-        let bundleCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("bundle"))
-        bundleCol.width = 160
+        let bundleCol = NSTableColumn(identifier: .init("bundle"))
+        bundleCol.width = 220
         disabledAppsTable.addTableColumn(bundleCol)
 
         disabledAppsTable.dataSource = self
         disabledAppsTable.delegate = self
         scrollView.documentView = disabledAppsTable
 
-        let addAppButton = NSButton(title: "+ Add App", target: self, action: #selector(addApp))
-        addAppButton.bezelStyle = .smallSquare
-        let removeAppButton = NSButton(title: "− Remove", target: self, action: #selector(removeApp))
-        removeAppButton.bezelStyle = .smallSquare
-        let appButtonRow = NSStackView(views: [addAppButton, removeAppButton, NSView()])
-        appButtonRow.orientation = .horizontal
-        appButtonRow.spacing = 4
+        let addBtn = NSButton(title: "+", target: self, action: #selector(addApp))
+        addBtn.bezelStyle = .smallSquare
+        let removeBtn = NSButton(title: "−", target: self, action: #selector(removeApp))
+        removeBtn.bezelStyle = .smallSquare
+
+        let appsButtonRow = NSStackView(views: [addBtn, removeBtn, NSView()])
+        appsButtonRow.orientation = .horizontal
+        appsButtonRow.spacing = 4
 
         loadDisabledApps()
 
-        // Main layout
-        let stack = NSStackView(views: [
-            enabledCheckbox, launchAtLoginCheckbox, delayRow, nonLLMCheckbox,
-            appsHeader, appsHint, scrollView, appButtonRow,
+        // ── Main stack ─────────────────────────────────────────────────────
+        let main = NSStackView(views: [
+            behaviourHeader, behaviourBox,
+            appsHeader, appsHint, scrollView, appsButtonRow,
         ])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 12
-        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
-        stack.translatesAutoresizingMaskIntoConstraints = false
+        main.orientation = .vertical
+        main.alignment = .leading
+        main.spacing = 8
+        main.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
+        main.translatesAutoresizingMaskIntoConstraints = false
 
-        addSubview(stack)
+        addSubview(main)
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            scrollView.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
-            appButtonRow.widthAnchor.constraint(equalTo: scrollView.widthAnchor),
+            main.topAnchor.constraint(equalTo: topAnchor),
+            main.leadingAnchor.constraint(equalTo: leadingAnchor),
+            main.trailingAnchor.constraint(equalTo: trailingAnchor),
+            main.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor),
+            scrollView.widthAnchor.constraint(equalTo: main.widthAnchor, constant: -40),
+            appsButtonRow.widthAnchor.constraint(equalTo: scrollView.widthAnchor),
+            behaviourBox.widthAnchor.constraint(equalTo: main.widthAnchor, constant: -40),
         ])
     }
 
-    // MARK: - General Actions
+    // MARK: - Layout helpers
+
+    private func sectionHeader(_ title: String) -> NSTextField {
+        let label = NSTextField(labelWithString: title)
+        label.font = .boldSystemFont(ofSize: 13)
+        label.textColor = .labelColor
+        return label
+    }
+
+    private func hintLabel(_ text: String) -> NSTextField {
+        let label = NSTextField(labelWithString: text)
+        label.font = .systemFont(ofSize: 11)
+        label.textColor = .secondaryLabelColor
+        return label
+    }
+
+    /// Wraps controls in a rounded NSBox (group box style).
+    private func groupBox(views: [NSView]) -> NSBox {
+        let box = NSBox()
+        box.boxType = .primary
+        box.titlePosition = .noTitle
+        box.cornerRadius = 8
+        box.contentViewMargins = NSSize(width: 12, height: 8)
+
+        let stack = NSStackView(views: views)
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        box.contentView?.addSubview(stack)
+
+        if let cv = box.contentView {
+            NSLayoutConstraint.activate([
+                stack.topAnchor.constraint(equalTo: cv.topAnchor),
+                stack.leadingAnchor.constraint(equalTo: cv.leadingAnchor),
+                stack.trailingAnchor.constraint(equalTo: cv.trailingAnchor),
+                stack.bottomAnchor.constraint(equalTo: cv.bottomAnchor),
+            ])
+        }
+        return box
+    }
+
+    // MARK: - General actions
 
     @objc private func toggleEnabled() {
         SettingsManager.shared.isEnabled = enabledCheckbox.state == .on
@@ -136,7 +194,7 @@ class GeneralSettingsView: NSView {
         SettingsManager.shared.showNonLLMActions = nonLLMCheckbox.state == .on
     }
 
-    // MARK: - Per-App Disable
+    // MARK: - Per-app disable
 
     private struct DisabledAppRow {
         var name: String
@@ -145,12 +203,10 @@ class GeneralSettingsView: NSView {
 
     private func loadDisabledApps() {
         let bundleIDs = SettingsManager.shared.disabledBundleIDs
-        disabledApps = bundleIDs.map { bundleID in
-            // Try to resolve a human-readable name from installed apps
+        disabledApps = bundleIDs.map { id in
             let name = NSWorkspace.shared.runningApplications
-                .first(where: { $0.bundleIdentifier == bundleID })?.localizedName
-                ?? bundleID
-            return DisabledAppRow(name: name, bundleID: bundleID)
+                .first(where: { $0.bundleIdentifier == id })?.localizedName ?? id
+            return DisabledAppRow(name: name, bundleID: id)
         }
         disabledAppsTable?.reloadData()
     }
@@ -162,21 +218,19 @@ class GeneralSettingsView: NSView {
     @objc private func addApp() {
         let panel = NSOpenPanel()
         panel.title = "Choose App to Disable"
-        panel.message = "Select an application to exclude from Highlight Tools."
+        panel.message = "Highlight Tools will not activate in the selected app."
         panel.allowedContentTypes = [.application]
         panel.allowsMultipleSelection = false
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
-
         guard let window else { return }
         panel.beginSheetModal(for: window) { [weak self] response in
             guard let self, response == .OK, let url = panel.url else { return }
             let bundle = Bundle(url: url)
-            let bundleID = bundle?.bundleIdentifier ?? url.deletingPathExtension().lastPathComponent
+            let bundleID = bundle?.bundleIdentifier
+                ?? url.deletingPathExtension().lastPathComponent
             let name = (bundle?.infoDictionary?["CFBundleDisplayName"] as? String)
                 ?? (bundle?.infoDictionary?["CFBundleName"] as? String)
                 ?? url.deletingPathExtension().lastPathComponent
-
-            // Avoid duplicates
             guard !self.disabledApps.contains(where: { $0.bundleID == bundleID }) else { return }
             self.disabledApps.append(DisabledAppRow(name: name, bundleID: bundleID))
             self.saveDisabledApps()
@@ -185,28 +239,26 @@ class GeneralSettingsView: NSView {
     }
 
     @objc private func removeApp() {
-        let selected = disabledAppsTable.selectedRow
-        guard selected >= 0, selected < disabledApps.count else { return }
-        disabledApps.remove(at: selected)
+        let row = disabledAppsTable.selectedRow
+        guard row >= 0, row < disabledApps.count else { return }
+        disabledApps.remove(at: row)
         saveDisabledApps()
         disabledAppsTable.reloadData()
     }
 }
 
-// MARK: - NSTableViewDataSource & Delegate (disabled apps)
+// MARK: - NSTableViewDataSource & Delegate
 
 extension GeneralSettingsView: NSTableViewDataSource, NSTableViewDelegate {
 
-    func numberOfRows(in tableView: NSTableView) -> Int {
-        disabledApps.count
-    }
+    func numberOfRows(in tableView: NSTableView) -> Int { disabledApps.count }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let app = disabledApps[row]
-        let colID = tableColumn?.identifier.rawValue ?? ""
-        let label = NSTextField(labelWithString: colID == "bundle" ? app.bundleID : app.name)
+        let isBundle = tableColumn?.identifier.rawValue == "bundle"
+        let label = NSTextField(labelWithString: isBundle ? app.bundleID : app.name)
         label.font = .systemFont(ofSize: 12)
-        label.textColor = colID == "bundle" ? .secondaryLabelColor : .labelColor
+        label.textColor = isBundle ? .secondaryLabelColor : .labelColor
         label.lineBreakMode = .byTruncatingTail
         return label
     }

@@ -7,7 +7,9 @@ private struct ActionRow {
     var icon: String
     var isEnabled: Bool
     var isCustom: Bool
-    var promptTemplate: String  // Only meaningful for custom actions
+    /// Whether this action has a prompt that the user can edit (LLM actions only).
+    var hasPrompt: Bool
+    var promptTemplate: String
 }
 
 /// Actions settings tab: unified table for all actions with reordering and icon editing.
@@ -30,23 +32,25 @@ class ActionsSettingsView: NSView {
         let headerLabel = NSTextField(labelWithString: "Actions")
         headerLabel.font = .boldSystemFont(ofSize: 13)
 
-        let hintLabel = NSTextField(labelWithString: "Drag to reorder. Double-click icon or name to edit.")
+        let hintLabel = NSTextField(labelWithString: "Click the icon to change it. Edit name and prompt inline. Drag rows to reorder.")
         hintLabel.font = .systemFont(ofSize: 11)
         hintLabel.textColor = .secondaryLabelColor
 
-        // Table
+        // Table with column headers so users know what each column is
         let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
+        scrollView.autohidesScrollers = true
         scrollView.borderType = .bezelBorder
 
         tableView = NSTableView()
-        tableView.headerView = nil
         tableView.rowHeight = 28
         tableView.intercellSpacing = NSSize(width: 4, height: 2)
         tableView.registerForDraggedTypes([.string])
         tableView.draggingDestinationFeedbackStyle = .gap
+        tableView.style = .plain
 
         let enabledCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("enabled"))
+        enabledCol.title = ""
         enabledCol.width = 24
         enabledCol.minWidth = 24
         enabledCol.maxWidth = 24
@@ -54,18 +58,18 @@ class ActionsSettingsView: NSView {
 
         let iconCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("icon"))
         iconCol.title = "Icon"
-        iconCol.width = 50
+        iconCol.width = 52
         iconCol.minWidth = 40
         tableView.addTableColumn(iconCol)
 
         let nameCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
         nameCol.title = "Name"
-        nameCol.width = 120
+        nameCol.width = 130
         tableView.addTableColumn(nameCol)
 
         let promptCol = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("prompt"))
-        promptCol.title = "Prompt"
-        promptCol.width = 220
+        promptCol.title = "Prompt template"
+        promptCol.width = 280
         tableView.addTableColumn(promptCol)
 
         tableView.dataSource = self
@@ -73,19 +77,21 @@ class ActionsSettingsView: NSView {
         scrollView.documentView = tableView
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 180).isActive = true
+        scrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 280).isActive = true
 
         // Buttons
-        let addButton = NSButton(title: "+", target: self, action: #selector(addCustomAction))
-        addButton.bezelStyle = .smallSquare
+        let addButton    = NSButton(title: "+", target: self, action: #selector(addCustomAction))
+        addButton.bezelStyle    = .smallSquare
+        addButton.toolTip       = "Add custom action"
         let removeButton = NSButton(title: "−", target: self, action: #selector(removeSelectedAction))
         removeButton.bezelStyle = .smallSquare
-        let moveActionUpButton = NSButton(image: NSImage(systemSymbolName: "chevron.up", accessibilityDescription: "Move Up")!, target: self, action: #selector(moveActionUp))
-        moveActionUpButton.bezelStyle = .smallSquare
-        let moveActionDownButton = NSButton(image: NSImage(systemSymbolName: "chevron.down", accessibilityDescription: "Move Down")!, target: self, action: #selector(moveActionDown))
-        moveActionDownButton.bezelStyle = .smallSquare
+        removeButton.toolTip    = "Remove selected (custom actions only)"
+        let upButton = NSButton(image: NSImage(systemSymbolName: "chevron.up",   accessibilityDescription: "Move Up")!,   target: self, action: #selector(moveActionUp))
+        upButton.bezelStyle   = .smallSquare
+        let downButton = NSButton(image: NSImage(systemSymbolName: "chevron.down", accessibilityDescription: "Move Down")!, target: self, action: #selector(moveActionDown))
+        downButton.bezelStyle = .smallSquare
 
-        let buttonRow = NSStackView(views: [addButton, removeButton, NSView(), moveActionUpButton, moveActionDownButton])
+        let buttonRow = NSStackView(views: [addButton, removeButton, NSView(), upButton, downButton])
         buttonRow.orientation = .horizontal
         buttonRow.spacing = 4
 
@@ -113,38 +119,42 @@ class ActionsSettingsView: NSView {
 
     private func loadRows() {
         rows = []
-        let settings = SettingsManager.shared
-        let iconOverrides = settings.actionIconOverrides
+        let settings        = SettingsManager.shared
+        let iconOverrides   = settings.actionIconOverrides
+        let nameOverrides   = settings.defaultActionNameOverrides
+        let promptOverrides = settings.defaultActionPromptOverrides
 
-        // Built-in non-LLM actions
+        // Built-in non-LLM actions (icon + enable/disable only — no prompt)
         let builtInNonLLM: [(id: String, name: String, icon: String)] = [
-            ("copy", "Copy", "doc.on.doc"),
+            ("copy",   "Copy",   "doc.on.doc"),
             ("search", "Search", "magnifyingglass"),
         ]
         for action in builtInNonLLM {
             rows.append(ActionRow(
                 id: action.id,
-                name: action.name,
+                name: nameOverrides[action.id] ?? action.name,
                 icon: iconOverrides[action.id] ?? action.icon,
                 isEnabled: settings.showNonLLMActions,
                 isCustom: false,
+                hasPrompt: false,
                 promptTemplate: ""
             ))
         }
 
-        // Default LLM actions
+        // Default LLM actions (name, icon, prompt all editable — user overrides applied)
         for action in DefaultPrompts.all {
             rows.append(ActionRow(
                 id: action.id,
-                name: action.name,
+                name: nameOverrides[action.id] ?? action.name,
                 icon: iconOverrides[action.id] ?? action.icon,
                 isEnabled: settings.isActionEnabled(action.id),
                 isCustom: false,
-                promptTemplate: action.promptTemplate
+                hasPrompt: true,
+                promptTemplate: promptOverrides[action.id] ?? action.promptTemplate
             ))
         }
 
-        // Custom actions
+        // Custom actions (fully editable)
         for config in settings.customActions {
             rows.append(ActionRow(
                 id: config.id,
@@ -152,6 +162,7 @@ class ActionsSettingsView: NSView {
                 icon: config.icon,
                 isEnabled: true,
                 isCustom: true,
+                hasPrompt: true,
                 promptTemplate: config.promptTemplate
             ))
         }
@@ -207,6 +218,27 @@ class ActionsSettingsView: NSView {
         settings.customActions = rows.filter(\.isCustom).map {
             CustomActionConfig(id: $0.id, name: $0.name, icon: $0.icon, promptTemplate: $0.promptTemplate)
         }
+
+        // Persist edited names/prompts for default LLM actions
+        let defaultLLMEdits = rows.filter { !$0.isCustom && $0.hasPrompt }
+        var nameOverrides: [String: String] = [:]
+        for row in defaultLLMEdits {
+            if let original = DefaultPrompts.all.first(where: { $0.id == row.id }),
+               row.name != original.name {
+                nameOverrides[row.id] = row.name
+            }
+        }
+        settings.defaultActionNameOverrides = nameOverrides
+
+        // Persist edited prompt templates for default LLM actions
+        var promptOverrides: [String: String] = [:]
+        for row in defaultLLMEdits {
+            if let original = DefaultPrompts.all.first(where: { $0.id == row.id }),
+               row.promptTemplate != original.promptTemplate {
+                promptOverrides[row.id] = row.promptTemplate
+            }
+        }
+        settings.defaultActionPromptOverrides = promptOverrides
     }
 
     // MARK: - Actions
@@ -218,6 +250,7 @@ class ActionsSettingsView: NSView {
             icon: "bolt",
             isEnabled: true,
             isCustom: true,
+            hasPrompt: true,
             promptTemplate: "{{selection}}"
         )
         rows.append(newAction)
@@ -291,28 +324,31 @@ extension ActionsSettingsView: NSTableViewDataSource, NSTableViewDelegate {
         case "name":
             let field = NSTextField()
             field.stringValue = actionRow.name
-            field.isEditable = actionRow.isCustom
+            // All actions can have their display name changed
+            field.isEditable = true
             field.isBordered = false
             field.drawsBackground = false
             field.font = .systemFont(ofSize: 12)
             field.delegate = self
             field.tag = row * 10 + 2
-            if !actionRow.isCustom {
-                field.textColor = .labelColor
-            }
+            field.toolTip = "Click to rename"
             return field
 
         case "prompt":
             let field = NSTextField()
             field.stringValue = actionRow.promptTemplate
-            field.isEditable = actionRow.isCustom
+            // Only LLM actions have editable prompts; use {{selection}} as the placeholder
+            let canEditPrompt = actionRow.hasPrompt
+            field.isEditable = canEditPrompt
             field.isBordered = false
             field.drawsBackground = false
             field.font = .systemFont(ofSize: 11)
-            field.textColor = .secondaryLabelColor
+            field.textColor = canEditPrompt ? .secondaryLabelColor : .tertiaryLabelColor
             field.lineBreakMode = .byTruncatingTail
+            field.placeholderString = canEditPrompt ? "{{selection}}" : "—"
             field.delegate = self
             field.tag = row * 10 + 3
+            if canEditPrompt { field.toolTip = "Use {{selection}} to insert the selected text" }
             return field
 
         default:

@@ -1,6 +1,6 @@
 import Cocoa
 
-/// Models settings tab: backend selection, API keys, model names, endpoints.
+/// Models settings tab — LLM backend, API keys, model selection, system prompt.
 class ModelsSettingsView: NSView {
 
     private var backendSelector: NSSegmentedControl!
@@ -15,6 +15,9 @@ class ModelsSettingsView: NSView {
     private var statusLabel: NSTextField!
     private var systemPromptView: NSTextView!
 
+    private let fieldWidth: CGFloat = 300
+    private let labelWidth: CGFloat = 100
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setup()
@@ -26,118 +29,155 @@ class ModelsSettingsView: NSView {
     }
 
     private func setup() {
-        // Backend selector
-        backendSelector = NSSegmentedControl(labels: ["Ollama (Local)", "OpenAI-compatible"], trackingMode: .selectOne, target: self, action: #selector(backendChanged))
-        backendSelector.selectedSegment = SettingsManager.shared.selectedBackend == "openai" ? 1 : 0
+        let settings = SettingsManager.shared
+
+        // ── Section: Backend ──────────────────────────────────────────────
+        let backendHeader = sectionHeader("AI Backend")
+
+        backendSelector = NSSegmentedControl(
+            labels: ["Ollama (Local)", "OpenAI-compatible"],
+            trackingMode: .selectOne,
+            target: self,
+            action: #selector(backendChanged)
+        )
+        backendSelector.selectedSegment = settings.selectedBackend == "openai" ? 1 : 0
 
         // Ollama fields
-        ollamaURLField = makeTextField(value: SettingsManager.shared.ollamaBaseURL, placeholder: "http://localhost:11434")
-        ollamaModelField = makeTextField(value: SettingsManager.shared.ollamaModel, placeholder: "llama3.2")
+        ollamaURLField   = makeField(value: settings.ollamaBaseURL, placeholder: "http://localhost:11434")
+        ollamaModelField = makeField(value: settings.ollamaModel, placeholder: "llama3.2")
         ollamaFields = NSStackView(views: [
-            labeledField("Server URL:", ollamaURLField),
-            labeledField("Model:", ollamaModelField),
+            labeledRow("Server URL", ollamaURLField),
+            labeledRow("Model",      ollamaModelField),
         ])
         ollamaFields.orientation = .vertical
-        ollamaFields.alignment = .leading
-        ollamaFields.spacing = 8
+        ollamaFields.alignment   = .leading
+        ollamaFields.spacing     = 8
 
         // OpenAI fields
-        openaiURLField = makeTextField(value: SettingsManager.shared.openaiBaseURL, placeholder: "https://api.openai.com")
+        openaiURLField = makeField(value: settings.openaiBaseURL, placeholder: "https://api.openai.com")
         openaiKeyField = NSSecureTextField()
-        openaiKeyField.stringValue = SettingsManager.shared.openaiAPIKey
-        openaiKeyField.placeholderString = "sk-..."
-        openaiKeyField.widthAnchor.constraint(equalToConstant: 300).isActive = true
-        openaiModelField = makeTextField(value: SettingsManager.shared.openaiModel, placeholder: "gpt-4o-mini")
+        openaiKeyField.stringValue       = settings.openaiAPIKey
+        openaiKeyField.placeholderString = "sk-…"
+        openaiKeyField.widthAnchor.constraint(equalToConstant: fieldWidth).isActive = true
+        openaiModelField = makeField(value: settings.openaiModel, placeholder: "gpt-4o-mini")
         openaiFields = NSStackView(views: [
-            labeledField("API Base URL:", openaiURLField),
-            labeledField("API Key:", openaiKeyField),
-            labeledField("Model:", openaiModelField),
+            labeledRow("API Base URL", openaiURLField),
+            labeledRow("API Key",      openaiKeyField),
+            labeledRow("Model",        openaiModelField),
         ])
         openaiFields.orientation = .vertical
-        openaiFields.alignment = .leading
-        openaiFields.spacing = 8
+        openaiFields.alignment   = .leading
+        openaiFields.spacing     = 8
 
-        // Test connection button
-        testButton = NSButton(title: "Test Connection", target: self, action: #selector(testConnection))
+        // Test + Save row
+        testButton  = NSButton(title: "Test Connection", target: self, action: #selector(testConnection))
+        testButton.bezelStyle = .rounded
         statusLabel = NSTextField(labelWithString: "")
+        statusLabel.font      = .systemFont(ofSize: 12)
         statusLabel.textColor = .secondaryLabelColor
         let testRow = NSStackView(views: [testButton, statusLabel])
         testRow.orientation = .horizontal
         testRow.spacing = 8
 
-        // System prompt
-        let promptHeader = NSTextField(labelWithString: "System Prompt")
-        promptHeader.font = .boldSystemFont(ofSize: 13)
-
-        let promptHint = NSTextField(labelWithString: "Prepended to every LLM request. Customise the AI's tone and behaviour.")
-        promptHint.font = .systemFont(ofSize: 11)
-        promptHint.textColor = .secondaryLabelColor
-
-        let promptScroll = NSScrollView()
-        promptScroll.hasVerticalScroller = true
-        promptScroll.autohidesScrollers = true
-        promptScroll.borderType = .bezelBorder
-        promptScroll.heightAnchor.constraint(equalToConstant: 80).isActive = true
-        promptScroll.widthAnchor.constraint(equalToConstant: 420).isActive = true
-
-        systemPromptView = NSTextView()
-        systemPromptView.isEditable = true
-        systemPromptView.isRichText = false
-        systemPromptView.font = .systemFont(ofSize: 12)
-        systemPromptView.string = SettingsManager.shared.systemPrompt
-        systemPromptView.isVerticallyResizable = true
-        systemPromptView.textContainer?.widthTracksTextView = true
-        promptScroll.documentView = systemPromptView
-
-        let promptStack = NSStackView(views: [promptHeader, promptHint, promptScroll])
-        promptStack.orientation = .vertical
-        promptStack.alignment = .leading
-        promptStack.spacing = 4
-
-        // Save button
         let saveButton = NSButton(title: "Save", target: self, action: #selector(save))
         saveButton.bezelStyle = .rounded
         saveButton.keyEquivalent = "\r"
 
-        // Main layout
-        let stack = NSStackView(views: [backendSelector, ollamaFields, openaiFields, testRow, promptStack, saveButton])
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 16
-        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
-        stack.translatesAutoresizingMaskIntoConstraints = false
+        // ── Section: System Prompt ────────────────────────────────────────
+        let promptHeader = sectionHeader("System Prompt")
+        let promptHint = hintLabel("Prepended to every AI request. Customise the tone, language, or behaviour.")
 
-        addSubview(stack)
+        let promptScroll = NSScrollView()
+        promptScroll.hasVerticalScroller = true
+        promptScroll.autohidesScrollers  = true
+        promptScroll.borderType          = .bezelBorder
+        promptScroll.heightAnchor.constraint(equalToConstant: 90).isActive = true
+
+        systemPromptView = NSTextView()
+        systemPromptView.isEditable    = true
+        systemPromptView.isRichText    = false
+        systemPromptView.font          = .systemFont(ofSize: 12)
+        systemPromptView.string        = settings.systemPrompt
+        systemPromptView.textContainerInset = NSSize(width: 4, height: 4)
+        systemPromptView.isVerticallyResizable = true
+        systemPromptView.textContainer?.widthTracksTextView = true
+        promptScroll.documentView = systemPromptView
+
+        // ── Main stack ────────────────────────────────────────────────────
+        let main = NSStackView(views: [
+            backendHeader,
+            backendSelector,
+            ollamaFields,
+            openaiFields,
+            testRow,
+            saveButton,
+            hairline(),
+            promptHeader,
+            promptHint,
+            promptScroll,
+        ])
+        main.orientation = .vertical
+        main.alignment   = .leading
+        main.spacing     = 10
+        main.edgeInsets  = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
+        main.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(main)
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            main.topAnchor.constraint(equalTo: topAnchor),
+            main.leadingAnchor.constraint(equalTo: leadingAnchor),
+            main.trailingAnchor.constraint(equalTo: trailingAnchor),
+            main.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor),
+            promptScroll.widthAnchor.constraint(equalTo: main.widthAnchor, constant: -40),
         ])
 
         updateFieldVisibility()
     }
 
-    private func makeTextField(value: String, placeholder: String) -> NSTextField {
-        let field = NSTextField()
-        field.stringValue = value
-        field.placeholderString = placeholder
-        field.widthAnchor.constraint(equalToConstant: 300).isActive = true
-        return field
+    // MARK: - Layout helpers
+
+    private func sectionHeader(_ title: String) -> NSTextField {
+        let label = NSTextField(labelWithString: title)
+        label.font = .boldSystemFont(ofSize: 13)
+        return label
     }
 
-    private func labeledField(_ label: String, _ field: NSView) -> NSStackView {
-        let labelView = NSTextField(labelWithString: label)
-        labelView.widthAnchor.constraint(equalToConstant: 100).isActive = true
-        labelView.alignment = .right
-        let row = NSStackView(views: [labelView, field])
-        row.orientation = .horizontal
-        row.spacing = 8
-        return row
+    private func hintLabel(_ text: String) -> NSTextField {
+        let label = NSTextField(wrappingLabelWithString: text)
+        label.font = .systemFont(ofSize: 11)
+        label.textColor = .secondaryLabelColor
+        return label
     }
 
-    @objc private func backendChanged() {
-        updateFieldVisibility()
+    private func makeField(value: String, placeholder: String) -> NSTextField {
+        let f = NSTextField()
+        f.stringValue       = value
+        f.placeholderString = placeholder
+        f.widthAnchor.constraint(equalToConstant: fieldWidth).isActive = true
+        return f
     }
+
+    private func labeledRow(_ labelText: String, _ control: NSView) -> NSStackView {
+        let lbl = NSTextField(labelWithString: labelText)
+        lbl.font      = .systemFont(ofSize: 12)
+        lbl.textColor = .secondaryLabelColor
+        lbl.alignment = .right
+        lbl.widthAnchor.constraint(equalToConstant: labelWidth).isActive = true
+        let r = NSStackView(views: [lbl, control])
+        r.orientation = .horizontal
+        r.spacing = 8
+        return r
+    }
+
+    private func hairline() -> NSBox {
+        let box = NSBox()
+        box.boxType = .separator
+        return box
+    }
+
+    // MARK: - Actions
+
+    @objc private func backendChanged() { updateFieldVisibility() }
 
     private func updateFieldVisibility() {
         let isOllama = backendSelector.selectedSegment == 0
@@ -146,42 +186,33 @@ class ModelsSettingsView: NSView {
     }
 
     @objc private func save() {
-        SettingsManager.shared.selectedBackend = backendSelector.selectedSegment == 0 ? "ollama" : "openai"
-        SettingsManager.shared.ollamaBaseURL = ollamaURLField.stringValue
-        SettingsManager.shared.ollamaModel = ollamaModelField.stringValue
-        SettingsManager.shared.openaiBaseURL = openaiURLField.stringValue
-        SettingsManager.shared.openaiAPIKey = openaiKeyField.stringValue
-        SettingsManager.shared.openaiModel = openaiModelField.stringValue
+        let s = SettingsManager.shared
+        s.selectedBackend = backendSelector.selectedSegment == 0 ? "ollama" : "openai"
+        s.ollamaBaseURL   = ollamaURLField.stringValue
+        s.ollamaModel     = ollamaModelField.stringValue
+        s.openaiBaseURL   = openaiURLField.stringValue
+        s.openaiAPIKey    = openaiKeyField.stringValue
+        s.openaiModel     = openaiModelField.stringValue
 
-        let promptText = systemPromptView.string.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !promptText.isEmpty {
-            SettingsManager.shared.systemPrompt = promptText
-        }
+        let prompt = systemPromptView.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !prompt.isEmpty { s.systemPrompt = prompt }
 
         statusLabel.stringValue = "Saved!"
-        statusLabel.textColor = .systemGreen
+        statusLabel.textColor   = .systemGreen
     }
 
     @objc private func testConnection() {
-        statusLabel.stringValue = "Testing..."
-        statusLabel.textColor = .secondaryLabelColor
-        testButton.isEnabled = false
-
+        statusLabel.stringValue = "Testing…"
+        statusLabel.textColor   = .secondaryLabelColor
+        testButton.isEnabled    = false
         save()
 
         Task {
-            let service = LLMServiceFactory.create()
-            let available = await service.isAvailable
-
+            let available = await LLMServiceFactory.create().isAvailable
             await MainActor.run {
-                testButton.isEnabled = true
-                if available {
-                    statusLabel.stringValue = "Connected!"
-                    statusLabel.textColor = .systemGreen
-                } else {
-                    statusLabel.stringValue = "Connection failed"
-                    statusLabel.textColor = .systemRed
-                }
+                self.testButton.isEnabled  = true
+                self.statusLabel.stringValue = available ? "Connected!" : "Connection failed"
+                self.statusLabel.textColor   = available ? .systemGreen : .systemRed
             }
         }
     }

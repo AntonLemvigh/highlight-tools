@@ -27,6 +27,8 @@ class SettingsManager {
         static let hasCompletedOnboarding = "hasCompletedOnboarding"
         static let disabledBundleIDs = "disabledBundleIDs"
         static let systemPrompt = "systemPrompt"
+        static let defaultActionNameOverrides = "defaultActionNameOverrides"
+        static let defaultActionPromptOverrides = "defaultActionPromptOverrides"
     }
 
     // MARK: - Init (register defaults)
@@ -163,6 +165,20 @@ class SettingsManager {
     var systemPrompt: String {
         get { defaults.string(forKey: Key.systemPrompt) ?? "You are a helpful assistant. Be concise and direct." }
         set { defaults.set(newValue, forKey: Key.systemPrompt) }
+    }
+
+    // MARK: - Default Action Customisation (name + prompt overrides)
+
+    /// User-edited display names for built-in LLM actions, keyed by action ID.
+    var defaultActionNameOverrides: [String: String] {
+        get { defaults.dictionary(forKey: Key.defaultActionNameOverrides) as? [String: String] ?? [:] }
+        set { defaults.set(newValue, forKey: Key.defaultActionNameOverrides) }
+    }
+
+    /// User-edited prompt templates for built-in LLM actions, keyed by action ID.
+    var defaultActionPromptOverrides: [String: String] {
+        get { defaults.dictionary(forKey: Key.defaultActionPromptOverrides) as? [String: String] ?? [:] }
+        set { defaults.set(newValue, forKey: Key.defaultActionPromptOverrides) }
     }
 
     // MARK: - Custom Actions
