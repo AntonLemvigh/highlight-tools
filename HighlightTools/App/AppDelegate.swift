@@ -9,6 +9,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var accessibilityManager: AccessibilityManager!
     private var popupController: PopupWindowController!
     private var settingsWindowController: SettingsWindowController?
+    private var historyWindowController: HistoryWindowController?
+    private var onboardingWindowController: OnboardingWindowController?
+    private var onboardingSettingsObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Hide from Dock and Cmd-Tab switcher (also set via LSUIElement in Info.plist)
@@ -43,6 +46,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onSettings: { [weak self] in
                 self?.showSettings()
+            },
+            onHistory: { [weak self] in
+                self?.showHistory()
             }
         )
 
@@ -50,17 +56,57 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if SettingsManager.shared.isEnabled {
             accessibilityManager.start()
         }
+
+        // Show onboarding on first launch
+        if !SettingsManager.shared.hasCompletedOnboarding {
+            showOnboarding()
+        }
+
+        // Handle onboarding → open Model Settings request
+        onboardingSettingsObserver = NotificationCenter.default.addObserver(
+            forName: OnboardingWindowController.openModelSettingsNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.showSettings(tab: 1)
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         accessibilityManager?.stop()
+        if let obs = onboardingSettingsObserver {
+            NotificationCenter.default.removeObserver(obs)
+        }
     }
 
-    private func showSettings() {
+    // MARK: - Window Management
+
+    private func showSettings(tab: Int = 0) {
         if settingsWindowController == nil {
             settingsWindowController = SettingsWindowController()
         }
         settingsWindowController?.showWindow(nil)
+        if tab > 0 {
+            settingsWindowController?.selectTab(tab)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func showHistory() {
+        if historyWindowController == nil {
+            historyWindowController = HistoryWindowController()
+        }
+        historyWindowController?.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func showOnboarding() {
+        let vc = OnboardingWindowController()
+        vc.onComplete = { [weak self] in
+            self?.onboardingWindowController = nil
+        }
+        onboardingWindowController = vc
+        vc.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 }

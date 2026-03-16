@@ -276,23 +276,17 @@ extension ActionsSettingsView: NSTableViewDataSource, NSTableViewDelegate {
             return checkbox
 
         case "icon":
-            let field = NSTextField()
-            field.stringValue = actionRow.icon
-            field.isEditable = true
-            field.isBordered = false
-            field.drawsBackground = false
-            field.font = .systemFont(ofSize: 12)
-            field.alignment = .center
-            field.delegate = self
-            field.tag = row * 10 + 1
-            // Show SF Symbol preview
-            if let img = NSImage(systemSymbolName: actionRow.icon, accessibilityDescription: actionRow.name) {
-                field.placeholderString = "SF Symbol"
-                let cell = NSTextFieldCell()
-                cell.stringValue = actionRow.icon
-                _ = img  // Image exists, icon name is valid
+            let btn = IconPreviewButton(symbolName: actionRow.icon, row: row) { [weak self] rowIndex, sourceRect, sourceView in
+                guard let self else { return }
+                IconPickerPanel.shared.show(near: sourceRect, in: sourceView) { [weak self] newIcon in
+                    guard let self, rowIndex < self.rows.count else { return }
+                    self.rows[rowIndex].icon = newIcon
+                    self.saveState()
+                    self.tableView.reloadData(forRowIndexes: IndexSet(integer: rowIndex),
+                                              columnIndexes: IndexSet(integer: 1))
+                }
             }
-            return field
+            return btn
 
         case "name":
             let field = NSTextField()
@@ -355,6 +349,72 @@ extension ActionsSettingsView: NSTableViewDataSource, NSTableViewDelegate {
         tableView.reloadData()
         tableView.selectRowIndexes(IndexSet(integer: destRow), byExtendingSelection: false)
         return true
+    }
+}
+
+// MARK: - IconPreviewButton
+
+/// A clickable SF Symbol preview that opens the icon picker panel when clicked.
+private class IconPreviewButton: NSView {
+
+    private let row: Int
+    private let onTap: (Int, NSRect, NSView) -> Void
+    private var imageView: NSImageView!
+    private var trackingArea: NSTrackingArea?
+    private var isHovered = false
+
+    init(symbolName: String, row: Int, onTap: @escaping (Int, NSRect, NSView) -> Void) {
+        self.row = row
+        self.onTap = onTap
+        super.init(frame: .zero)
+        setup(symbolName: symbolName)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func setup(symbolName: String) {
+        wantsLayer = true
+        layer?.cornerRadius = 5
+        toolTip = "Click to change icon"
+
+        imageView = NSImageView()
+        let config = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+        imageView.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: symbolName)?
+            .withSymbolConfiguration(config)
+            ?? NSImage(systemSymbolName: "questionmark", accessibilityDescription: "unknown")?
+                .withSymbolConfiguration(config)
+        imageView.contentTintColor = .labelColor
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(imageView)
+        NSLayoutConstraint.activate([
+            imageView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            imageView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            widthAnchor.constraint(equalToConstant: 44),
+            heightAnchor.constraint(equalToConstant: 24),
+        ])
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let t = trackingArea { removeTrackingArea(t) }
+        trackingArea = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways], owner: self, userInfo: nil)
+        addTrackingArea(trackingArea!)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.12).cgColor
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        layer?.backgroundColor = NSColor.clear.cgColor
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        onTap(row, bounds, self)
     }
 }
 

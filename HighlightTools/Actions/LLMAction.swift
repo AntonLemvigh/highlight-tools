@@ -26,7 +26,7 @@ struct LLMAction: Action {
         let prompt = promptTemplate.replacingOccurrences(of: "{{selection}}", with: text)
 
         let stream = await service.stream(
-            systemPrompt: "You are a helpful assistant. Be concise and direct.",
+            systemPrompt: SettingsManager.shared.systemPrompt,
             userContent: prompt
         )
 

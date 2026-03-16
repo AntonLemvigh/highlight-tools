@@ -13,6 +13,7 @@ class ModelsSettingsView: NSView {
     private var openaiModelField: NSTextField!
     private var testButton: NSButton!
     private var statusLabel: NSTextField!
+    private var systemPromptView: NSTextView!
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -64,13 +65,42 @@ class ModelsSettingsView: NSView {
         testRow.orientation = .horizontal
         testRow.spacing = 8
 
+        // System prompt
+        let promptHeader = NSTextField(labelWithString: "System Prompt")
+        promptHeader.font = .boldSystemFont(ofSize: 13)
+
+        let promptHint = NSTextField(labelWithString: "Prepended to every LLM request. Customise the AI's tone and behaviour.")
+        promptHint.font = .systemFont(ofSize: 11)
+        promptHint.textColor = .secondaryLabelColor
+
+        let promptScroll = NSScrollView()
+        promptScroll.hasVerticalScroller = true
+        promptScroll.autohidesScrollers = true
+        promptScroll.borderType = .bezelBorder
+        promptScroll.heightAnchor.constraint(equalToConstant: 80).isActive = true
+        promptScroll.widthAnchor.constraint(equalToConstant: 420).isActive = true
+
+        systemPromptView = NSTextView()
+        systemPromptView.isEditable = true
+        systemPromptView.isRichText = false
+        systemPromptView.font = .systemFont(ofSize: 12)
+        systemPromptView.string = SettingsManager.shared.systemPrompt
+        systemPromptView.isVerticallyResizable = true
+        systemPromptView.textContainer?.widthTracksTextView = true
+        promptScroll.documentView = systemPromptView
+
+        let promptStack = NSStackView(views: [promptHeader, promptHint, promptScroll])
+        promptStack.orientation = .vertical
+        promptStack.alignment = .leading
+        promptStack.spacing = 4
+
         // Save button
         let saveButton = NSButton(title: "Save", target: self, action: #selector(save))
         saveButton.bezelStyle = .rounded
         saveButton.keyEquivalent = "\r"
 
         // Main layout
-        let stack = NSStackView(views: [backendSelector, ollamaFields, openaiFields, testRow, saveButton])
+        let stack = NSStackView(views: [backendSelector, ollamaFields, openaiFields, testRow, promptStack, saveButton])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 16
@@ -122,6 +152,11 @@ class ModelsSettingsView: NSView {
         SettingsManager.shared.openaiBaseURL = openaiURLField.stringValue
         SettingsManager.shared.openaiAPIKey = openaiKeyField.stringValue
         SettingsManager.shared.openaiModel = openaiModelField.stringValue
+
+        let promptText = systemPromptView.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !promptText.isEmpty {
+            SettingsManager.shared.systemPrompt = promptText
+        }
 
         statusLabel.stringValue = "Saved!"
         statusLabel.textColor = .systemGreen

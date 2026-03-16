@@ -12,6 +12,13 @@ class PopupWindowController: NSWindowController {
     private var localClickMonitor: Any?
     private var currentSelectionInfo: SelectionInfo?
     private var currentStreamTask: Task<Void, Never>?
+    private var pendingResizeWork: DispatchWorkItem?
+
+    // For history & pin support
+    private var currentActionName: String?
+    private var currentResponseAccumulator: String = ""
+    /// All detached (pinned) response windows — kept alive so they don't deallocate.
+    private var detachedWindows: [DetachedResponseWindowController] = []
 
     init() {
         let panel = PopupPanel(
@@ -50,21 +57,67 @@ class PopupWindowController: NSWindowController {
         contentView.onActionSelected = { [weak self] action in
             self?.handleAction(action)
         }
+        contentView.onStopStreaming = { [weak self] in
+            self?.currentStreamTask?.cancel()
+            self?.currentStreamTask = nil
+            self?.saveHistoryIfNeeded()
+            self?.contentView.finishResponse()
+            self?.contentView.clearActiveButton()
+            self?.resizeForResponse(animated: true)
+        }
+        contentView.onPinResponse = { [weak self] in
+            self?.pinCurrentResponse()
+        }
         popupPanel.contentView = contentView
     }
 
     private func setupClickMonitors() {
-        // Dismiss when clicking outside the popup
+        // Dismiss when clicking outside the popup (ignore clicks inside the popup frame)
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            self?.dismiss()
+            guard let self else { return }
+            guard !self.popupPanel.frame.contains(NSEvent.mouseLocation) else { return }
+            self.dismiss()
         }
 
-        // Dismiss on Escape key
+        // Keyboard shortcuts (only when popup is visible, non-activating panel so local monitor works)
         localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            if event.keyCode == 53 { // Escape
-                self?.dismiss()
+            guard let self, self.popupPanel.isVisible else { return event }
+
+            let key = event.keyCode
+            let char = event.charactersIgnoringModifiers?.lowercased()
+
+            // Escape: back to buttons if response showing, else dismiss
+            if key == 53 {
+                if self.contentView.isShowingResponse {
+                    self.contentView.hideResponseArea()
+                    self.pendingResizeWork?.cancel()
+                    self.resizeForResponse(animated: true)
+                } else {
+                    self.dismiss()
+                }
                 return nil
             }
+
+            // "C" — copy response when response is visible
+            if char == "c", self.contentView.isShowingResponse, event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty {
+                self.contentView.copyCurrentResponse()
+                return nil
+            }
+
+            // "P" — pin/detach response when response is done
+            if char == "p", self.contentView.isShowingResponse, event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty {
+                self.pinCurrentResponse()
+                return nil
+            }
+
+            // 1-9 — trigger nth action (when no response is showing)
+            if !self.contentView.isShowingResponse,
+               let num = Int(char ?? ""), num >= 1 && num <= 9,
+               event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty {
+                self.contentView.triggerAction(at: num - 1)
+                return nil
+            }
+
             return event
         }
     }
@@ -116,11 +169,43 @@ class PopupWindowController: NSWindowController {
         })
     }
 
+    // MARK: - History & Pin
+
+    private func saveHistoryIfNeeded() {
+        guard let actionName = currentActionName,
+              !currentResponseAccumulator.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let selectedText = currentSelectionInfo?.text else { return }
+        ResponseHistoryManager.shared.add(
+            actionName: actionName,
+            selectedText: selectedText,
+            response: currentResponseAccumulator
+        )
+        currentResponseAccumulator = ""
+    }
+
+    private func pinCurrentResponse() {
+        guard let actionName = currentActionName,
+              !currentResponseAccumulator.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let selectedText = currentSelectionInfo?.text else { return }
+        let detached = DetachedResponseWindowController(
+            actionName: actionName,
+            selectedText: selectedText,
+            response: currentResponseAccumulator
+        )
+        detachedWindows.append(detached)
+        detached.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     // MARK: - Action Handling
 
     private func handleAction(_ action: any Action) {
         guard let info = currentSelectionInfo else { return }
 
+        currentActionName = action.name
+        currentResponseAccumulator = ""
+
+        contentView.setActiveButton(action)
         let service = LLMServiceFactory.create()
 
         currentStreamTask = Task {
@@ -131,11 +216,12 @@ class PopupWindowController: NSWindowController {
                 case .stream(let stream):
                     streamResponse(stream)
                 case .completed:
-                    // Brief flash, then dismiss
+                    self.contentView.clearActiveButton()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                         self?.dismiss()
                     }
                 case .openURL(let url):
+                    self.contentView.clearActiveButton()
                     NSWorkspace.shared.open(url)
                     dismiss()
                 }
@@ -144,7 +230,6 @@ class PopupWindowController: NSWindowController {
     }
 
     private func streamResponse(_ stream: AsyncThrowingStream<String, Error>) {
-        // Expand the popup to show the response area
         contentView.showResponseArea()
         resizeForResponse(animated: false)
 
@@ -152,24 +237,40 @@ class PopupWindowController: NSWindowController {
             do {
                 for try await token in stream {
                     await MainActor.run {
-                        contentView.appendResponseToken(token)
-                        if contentView.updateResponseHeight() {
-                            resizeForResponse(animated: true)
+                        self.currentResponseAccumulator += token
+                        self.contentView.appendResponseToken(token)
+                        if self.contentView.updateResponseHeight() {
+                            self.scheduleResize()
                         }
                     }
                 }
                 await MainActor.run {
-                    contentView.finishResponse()
-                    resizeForResponse(animated: true)
+                    self.pendingResizeWork?.cancel()
+                    self.saveHistoryIfNeeded()
+                    self.contentView.finishResponse()
+                    self.contentView.clearActiveButton()
+                    self.resizeForResponse(animated: true)
                 }
             } catch {
                 if !Task.isCancelled {
                     await MainActor.run {
-                        contentView.showError(error.localizedDescription)
+                        self.contentView.showError(error.localizedDescription)
+                        self.contentView.clearActiveButton()
                     }
                 }
             }
         }
+    }
+
+    /// Coalesces rapid per-token resize calls into one smooth animation every ~60ms.
+    private func scheduleResize() {
+        guard pendingResizeWork == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            self?.pendingResizeWork = nil
+            self?.resizeForResponse(animated: true)
+        }
+        pendingResizeWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: work)
     }
 
     private func resizeForResponse(animated: Bool) {
@@ -184,14 +285,15 @@ class PopupWindowController: NSWindowController {
         let heightDelta = newSize.height - frame.height
         guard abs(heightDelta) > 1 else { return }
 
-        frame.origin.y -= heightDelta  // Grow downward (adjust origin since AppKit is bottom-left)
+        frame.origin.y -= heightDelta
         frame.size = newSize
 
         if animated {
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.15
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                popupPanel.animator().setFrame(frame, display: true)
+                context.duration = 0.18
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                context.allowsImplicitAnimation = true
+                self.popupPanel.animator().setFrame(frame, display: true)
             }
         } else {
             popupPanel.setFrame(frame, display: true)

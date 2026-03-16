@@ -21,6 +21,7 @@ class AccessibilityManager {
     private var appSwitchWorkItem: DispatchWorkItem?
     private let debouncer: Debouncer
     private var dragCount: Int = 0
+    private var mouseDownLocation: CGPoint?
 
     init(onSelectionChange: @escaping (SelectionInfo?) -> Void) {
         self.onSelectionChange = onSelectionChange
@@ -95,9 +96,10 @@ class AccessibilityManager {
     private func beginObserving() {
         AppLogger.accessibility.info("Starting accessibility observation")
 
-        // Track mouseDown — reset drag count
+        // Track mouseDown — reset drag count and save location for selection bounds estimation
         mouseDownMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] _ in
             self?.dragCount = 0
+            self?.mouseDownLocation = NSEvent.mouseLocation
         }
 
         // Count drag events to distinguish drag-selection from click
@@ -109,16 +111,16 @@ class AccessibilityManager {
         mouseUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
             guard let self, let observer = self.currentObserver else { return }
             let mouseUpLocation = NSEvent.mouseLocation
+            let mouseDownLoc = self.mouseDownLocation
             let wasDragged = self.dragCount >= 3
             let isDoubleClick = event.clickCount >= 2
             self.dragCount = 0
+            self.mouseDownLocation = nil
 
-            // Only check if user actually selected something (drag or double-click)
             guard wasDragged || isDoubleClick else { return }
 
-            // Short delay to let the target app finalize its selection
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                observer.checkSelectionNow(mouseLocation: mouseUpLocation)
+                observer.checkSelectionNow(mouseUpLocation: mouseUpLocation, mouseDownLocation: mouseDownLoc)
             }
         }
 
@@ -152,6 +154,14 @@ class AccessibilityManager {
 
         // Don't observe ourselves
         guard pid != ProcessInfo.processInfo.processIdentifier else { return }
+
+        // Skip apps that the user has disabled
+        if let app = NSRunningApplication(processIdentifier: pid),
+           let bundleID = app.bundleIdentifier,
+           SettingsManager.shared.isBundleIDDisabled(bundleID) {
+            AppLogger.accessibility.debug("Skipping disabled app: \(bundleID)")
+            return
+        }
 
         // Small delay to avoid thrashing during rapid Cmd-Tab switching
         let workItem = DispatchWorkItem { [weak self] in

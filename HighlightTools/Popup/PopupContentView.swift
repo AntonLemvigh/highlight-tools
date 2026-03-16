@@ -6,6 +6,11 @@ import Cocoa
 class PopupContentView: NSView {
 
     var onActionSelected: ((any Action) -> Void)?
+    var onStopStreaming: (() -> Void)?
+    var onPinResponse: (() -> Void)?
+
+    /// Ordered list of actions shown in the popup (mirrors buttonStack order).
+    private var orderedActions: [any Action] = []
 
     private var buttonStack: NSStackView!
     private var responseScrollView: NSScrollView?
@@ -17,6 +22,11 @@ class PopupContentView: NSView {
     private var responseHeightConstraint: NSLayoutConstraint?
     private(set) var hasReachedMaxHeight = false
     private let maxResponseHeight: CGFloat = 300
+    private var actionButtons: [String: ActionButton] = [:]  // keyed by action name
+    private var wordCountLabel: NSTextField?
+    private var stopButton: NSView?
+
+    var isShowingResponse: Bool { responseContainer != nil }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -90,17 +100,46 @@ class PopupContentView: NSView {
     // MARK: - Configure with selection
 
     func configure(with info: SelectionInfo) {
-        // Remove old buttons
         buttonStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        actionButtons.removeAll()
 
-        // Add action buttons from the registry
         let actions = ActionRegistry.shared.actions
+        orderedActions = actions
         for action in actions {
             let button = ActionButton(action: action) { [weak self] action in
                 self?.onActionSelected?(action)
             }
             buttonStack.addArrangedSubview(button)
+            actionButtons[action.name] = button
         }
+
+        // Word / character count badge
+        let words = info.text.split(whereSeparator: \.isWhitespace).count
+        let chars = info.text.count
+        let countText = words == 1 ? "1 word" : "\(words) words · \(chars) chars"
+        if let existing = wordCountLabel {
+            existing.stringValue = countText
+        } else {
+            let label = NSTextField(labelWithString: countText)
+            label.font = .systemFont(ofSize: 10, weight: .regular)
+            label.textColor = .tertiaryLabelColor
+            label.alignment = .right
+            label.translatesAutoresizingMaskIntoConstraints = false
+            buttonStack.addArrangedSubview(label)
+            wordCountLabel = label
+        }
+    }
+
+    // MARK: - Loading State
+
+    func setActiveButton(_ action: any Action) {
+        for (name, button) in actionButtons {
+            button.setActive(name == action.name)
+        }
+    }
+
+    func clearActiveButton() {
+        actionButtons.values.forEach { $0.setActive(false) }
     }
 
     // MARK: - Response Area
@@ -116,6 +155,7 @@ class PopupContentView: NSView {
         let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = false
         scrollView.scrollerStyle = .overlay
@@ -161,6 +201,17 @@ class PopupContentView: NSView {
         self.responseScrollView = scrollView
         self.responseTextView = textView
         self.responseContainer = container
+
+        // Stop button — appears while streaming, dismissed in finishResponse()
+        let stop = StopStreamingButton { [weak self] in
+            self?.onStopStreaming?()
+        }
+        stop.translatesAutoresizingMaskIntoConstraints = false
+        let stopWrapper = NSStackView(views: [NSView(), stop])
+        stopWrapper.orientation = .horizontal
+        stopWrapper.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 4, right: 8)
+        mainStack.addArrangedSubview(stopWrapper)
+        self.stopButton = stopWrapper
     }
 
     func appendResponseToken(_ token: String) {
@@ -203,21 +254,43 @@ class PopupContentView: NSView {
     }
 
     func finishResponse() {
+        // Remove stop button, replace with copy + pin buttons
+        stopButton?.removeFromSuperview()
+        stopButton = nil
+
         guard copyResponseButton == nil else { return }
 
-        let button = CopyResponseButton { [weak self] in
-            guard let text = self?.responseTextView?.string, !text.isEmpty else { return }
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
+        let copyBtn = CopyResponseButton { [weak self] in
+            self?.copyCurrentResponse()
         }
-        button.translatesAutoresizingMaskIntoConstraints = false
+        copyBtn.translatesAutoresizingMaskIntoConstraints = false
 
-        let wrapper = NSStackView(views: [NSView(), button])  // NSView() as spacer to push right
+        let pinBtn = PinResponseButton { [weak self] in
+            self?.onPinResponse?()
+        }
+        pinBtn.translatesAutoresizingMaskIntoConstraints = false
+
+        let wrapper = NSStackView(views: [NSView(), copyBtn, pinBtn])
         wrapper.orientation = .horizontal
+        wrapper.spacing = 6
         wrapper.edgeInsets = NSEdgeInsets(top: 2, left: 8, bottom: 4, right: 8)
 
         mainStack.addArrangedSubview(wrapper)
         copyResponseButton = wrapper
+    }
+
+    /// Copy response text to clipboard (also triggered by keyboard shortcut "C").
+    func copyCurrentResponse() {
+        guard let text = responseTextView?.string, !text.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    /// Trigger the action at position `index` in the displayed button list.
+    /// Used for keyboard shortcuts 1–9.
+    func triggerAction(at index: Int) {
+        guard index < orderedActions.count else { return }
+        onActionSelected?(orderedActions[index])
     }
 
     func showError(_ message: String) {
@@ -231,7 +304,11 @@ class PopupContentView: NSView {
         storage.endEditing()
     }
 
-    func reset() {
+    /// Hides just the response area, leaving action buttons visible.
+    /// Called when user presses Esc while a response is shown.
+    func hideResponseArea() {
+        stopButton?.removeFromSuperview()
+        stopButton = nil
         responseContainer?.removeFromSuperview()
         responseContainer = nil
         responseScrollView = nil
@@ -240,6 +317,14 @@ class PopupContentView: NSView {
         hasReachedMaxHeight = false
         copyResponseButton?.removeFromSuperview()
         copyResponseButton = nil
+        clearActiveButton()
+    }
+
+    func reset() {
+        hideResponseArea()
+        actionButtons.removeAll()
+        orderedActions = []
+        wordCountLabel = nil
     }
 
     // MARK: - Sizing
@@ -260,7 +345,9 @@ private class ActionButton: NSView {
     private let onClick: (any Action) -> Void
     private var isHovered = false
     private var isPressed = false
+    private var isActive = false
     private var trackingArea: NSTrackingArea?
+    private var pulseTimer: Timer?
 
     private let iconView: NSImageView
 
@@ -336,7 +423,30 @@ private class ActionButton: NSView {
         }
     }
 
+    func setActive(_ active: Bool) {
+        isActive = active
+        if active {
+            iconView.contentTintColor = .controlAccentColor
+            // Pulse: alternate opacity between 1.0 and 0.4
+            pulseTimer?.invalidate()
+            pulseTimer = Timer.scheduledTimer(withTimeInterval: 0.55, repeats: true) { [weak self] _ in
+                guard let self else { return }
+                let current = self.iconView.alphaValue
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0.45
+                    self.iconView.animator().alphaValue = current > 0.7 ? 0.35 : 1.0
+                }
+            }
+        } else {
+            pulseTimer?.invalidate()
+            pulseTimer = nil
+            iconView.alphaValue = 1.0
+            updateAppearance()
+        }
+    }
+
     private func updateAppearance() {
+        guard !isActive else { return }
         if isPressed {
             layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.12).cgColor
             iconView.contentTintColor = .controlAccentColor
@@ -347,6 +457,157 @@ private class ActionButton: NSView {
             layer?.backgroundColor = NSColor.clear.cgColor
             iconView.contentTintColor = .labelColor
         }
+    }
+}
+
+// MARK: - StopStreamingButton
+
+/// Small "Stop" button shown while an LLM response is streaming.
+private class StopStreamingButton: NSView {
+
+    private let onClick: () -> Void
+    private let iconView = NSImageView()
+    private let label = NSTextField(labelWithString: "Stop")
+    private var trackingArea: NSTrackingArea?
+    private var isHovered = false
+
+    init(onClick: @escaping () -> Void) {
+        self.onClick = onClick
+        super.init(frame: .zero)
+        setup()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func setup() {
+        wantsLayer = true
+        layer?.cornerRadius = 6
+
+        let config = NSImage.SymbolConfiguration(pointSize: 10, weight: .medium)
+        iconView.image = NSImage(systemSymbolName: "stop.circle", accessibilityDescription: "Stop")?
+            .withSymbolConfiguration(config)
+        iconView.contentTintColor = .secondaryLabelColor
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+
+        label.font = .systemFont(ofSize: 10, weight: .medium)
+        label.textColor = .secondaryLabelColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        let stack = NSStackView(views: [iconView, label])
+        stack.orientation = .horizontal
+        stack.spacing = 3
+        stack.edgeInsets = NSEdgeInsets(top: 3, left: 6, bottom: 3, right: 6)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let area = trackingArea { removeTrackingArea(area) }
+        trackingArea = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways], owner: self, userInfo: nil)
+        addTrackingArea(trackingArea!)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        layer?.backgroundColor = NSColor.systemRed.withAlphaComponent(0.08).cgColor
+        label.textColor = .systemRed
+        iconView.contentTintColor = .systemRed
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        layer?.backgroundColor = NSColor.clear.cgColor
+        label.textColor = .secondaryLabelColor
+        iconView.contentTintColor = .secondaryLabelColor
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        onClick()
+    }
+}
+
+// MARK: - PinResponseButton
+
+/// Small "Pin" button to detach the response into a persistent floating window.
+private class PinResponseButton: NSView {
+
+    private let onClick: () -> Void
+    private let iconView = NSImageView()
+    private let label = NSTextField(labelWithString: "Pin")
+    private var trackingArea: NSTrackingArea?
+    private var isHovered = false
+
+    init(onClick: @escaping () -> Void) {
+        self.onClick = onClick
+        super.init(frame: .zero)
+        setup()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func setup() {
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        toolTip = "Pin response (P)"
+
+        let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
+        iconView.image = NSImage(systemSymbolName: "pin", accessibilityDescription: "Pin")?.withSymbolConfiguration(config)
+        iconView.contentTintColor = .secondaryLabelColor
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+
+        label.font = NSFont.systemFont(ofSize: 10, weight: .medium)
+        label.textColor = .secondaryLabelColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        let stack = NSStackView(views: [iconView, label])
+        stack.orientation = .horizontal
+        stack.spacing = 3
+        stack.edgeInsets = NSEdgeInsets(top: 3, left: 6, bottom: 3, right: 6)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let area = trackingArea { removeTrackingArea(area) }
+        trackingArea = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways], owner: self, userInfo: nil)
+        addTrackingArea(trackingArea!)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.06).cgColor
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        layer?.backgroundColor = NSColor.clear.cgColor
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.12).cgColor
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        layer?.backgroundColor = isHovered ? NSColor.labelColor.withAlphaComponent(0.06).cgColor : NSColor.clear.cgColor
+        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        onClick()
     }
 }
 

@@ -7,11 +7,13 @@ class StatusBarController {
     private var statusItem: NSStatusItem
     private let onToggle: (Bool) -> Void
     private let onSettings: () -> Void
+    private let onHistory: () -> Void
     private var enabledMenuItem: NSMenuItem!
 
-    init(onToggle: @escaping (Bool) -> Void, onSettings: @escaping () -> Void) {
+    init(onToggle: @escaping (Bool) -> Void, onSettings: @escaping () -> Void, onHistory: @escaping () -> Void) {
         self.onToggle = onToggle
         self.onSettings = onSettings
+        self.onHistory = onHistory
 
         // Create a status item with a fixed-width icon slot
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -36,6 +38,11 @@ class StatusBarController {
 
         menu.addItem(.separator())
 
+        // History
+        let historyItem = NSMenuItem(title: "Response History…", action: #selector(openHistory), keyEquivalent: "")
+        historyItem.target = self
+        menu.addItem(historyItem)
+
         // Open settings
         let settingsItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
@@ -59,5 +66,9 @@ class StatusBarController {
 
     @objc private func openSettings() {
         onSettings()
+    }
+
+    @objc private func openHistory() {
+        onHistory()
     }
 }

@@ -23,8 +23,10 @@ class SettingsWindowController: NSWindowController {
         fatalError("init(coder:) not used")
     }
 
+    private var tabView: NSTabView!
+
     private func setupTabs() {
-        let tabView = NSTabView()
+        tabView = NSTabView()
         tabView.translatesAutoresizingMaskIntoConstraints = false
 
         // General tab
@@ -46,5 +48,11 @@ class SettingsWindowController: NSWindowController {
         tabView.addTabViewItem(actionsTab)
 
         window?.contentView = tabView
+    }
+
+    /// Select a specific tab by index (0=General, 1=Models, 2=Actions).
+    func selectTab(_ index: Int) {
+        guard let tabView, index < tabView.numberOfTabViewItems else { return }
+        tabView.selectTabViewItem(at: index)
     }
 }

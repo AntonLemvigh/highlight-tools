@@ -24,6 +24,9 @@ class SettingsManager {
         static let enabledDefaultActions = "enabledDefaultActions"
         static let actionOrder = "actionOrder"
         static let actionIconOverrides = "actionIconOverrides"
+        static let hasCompletedOnboarding = "hasCompletedOnboarding"
+        static let disabledBundleIDs = "disabledBundleIDs"
+        static let systemPrompt = "systemPrompt"
     }
 
     // MARK: - Init (register defaults)
@@ -40,6 +43,9 @@ class SettingsManager {
             Key.showNonLLMActions: true,
             Key.triggerDelay: 0.3,
             Key.enabledDefaultActions: ["explain", "translate", "summarize", "fixgrammar"],
+            Key.hasCompletedOnboarding: false,
+            Key.disabledBundleIDs: [String](),
+            Key.systemPrompt: "You are a helpful assistant. Be concise and direct.",
         ])
     }
 
@@ -130,6 +136,33 @@ class SettingsManager {
         var overrides = actionIconOverrides
         overrides[actionID] = icon
         actionIconOverrides = overrides
+    }
+
+    // MARK: - Onboarding
+
+    var hasCompletedOnboarding: Bool {
+        get { defaults.bool(forKey: Key.hasCompletedOnboarding) }
+        set { defaults.set(newValue, forKey: Key.hasCompletedOnboarding) }
+    }
+
+    // MARK: - Per-App Disable
+
+    /// Bundle IDs of apps where Highlight Tools should not activate (e.g. "com.1password.1password").
+    var disabledBundleIDs: [String] {
+        get { defaults.stringArray(forKey: Key.disabledBundleIDs) ?? [] }
+        set { defaults.set(newValue, forKey: Key.disabledBundleIDs) }
+    }
+
+    func isBundleIDDisabled(_ bundleID: String) -> Bool {
+        disabledBundleIDs.contains(bundleID)
+    }
+
+    // MARK: - System Prompt
+
+    /// Global system prompt prepended to all LLM calls.
+    var systemPrompt: String {
+        get { defaults.string(forKey: Key.systemPrompt) ?? "You are a helpful assistant. Be concise and direct." }
+        set { defaults.set(newValue, forKey: Key.systemPrompt) }
     }
 
     // MARK: - Custom Actions

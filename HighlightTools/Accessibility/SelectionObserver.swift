@@ -163,29 +163,31 @@ class SelectionObserver {
     // MARK: - mouseUp Trigger (tier 3: full fallback chain)
 
     /// Called by AccessibilityManager on global mouseUp (drag or double-click).
-    func checkSelectionNow(mouseLocation: CGPoint) {
+    /// Both mouse positions are provided so we can estimate selection bounds for non-AX apps.
+    func checkSelectionNow(mouseUpLocation: CGPoint, mouseDownLocation: CGPoint?) {
         // Tier 1: AX API (instant, no side effects)
         if let axText = readSelectedText() {
-            reportText(axText, mouseLocation: mouseLocation, source: "AX-mouseUp")
+            reportText(axText, mouseUpLocation: mouseUpLocation, mouseDownLocation: mouseDownLocation, source: "AX-mouseUp")
             return
         }
 
         // Tier 2: AppleScript for known browsers (Safari, Chrome, Arc, Brave)
         if let browserText = readBrowserSelection() {
-            reportText(browserText, mouseLocation: mouseLocation, source: "Browser")
+            reportText(browserText, mouseUpLocation: mouseUpLocation, mouseDownLocation: mouseDownLocation, source: "Browser")
             return
         }
 
         // Tier 3: Copy via menu bar or Cmd+C, then restore pasteboard
-        performCopyFallback(mouseLocation: mouseLocation)
+        performCopyFallback(mouseUpLocation: mouseUpLocation, mouseDownLocation: mouseDownLocation)
     }
 
-    private func reportText(_ text: String, mouseLocation: CGPoint, source: String) {
+    private func reportText(_ text: String, mouseUpLocation: CGPoint, mouseDownLocation: CGPoint?, source: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 2 else { return }
 
         lastPolledText = text
-        let bounds = getSelectionBoundsFromFocused() ?? mouseLocationBounds(at: mouseLocation)
+        let bounds = getSelectionBoundsFromFocused()
+            ?? estimatedSelectionBounds(mouseUp: mouseUpLocation, mouseDown: mouseDownLocation)
         let info = SelectionInfo(text: text, bounds: bounds, pid: pid)
         AppLogger.accessibility.debug("\(source): \"\(text.prefix(50))\"")
         onSelection(info)
@@ -244,7 +246,7 @@ class SelectionObserver {
 
     /// Saves the pasteboard, triggers Copy via menu bar AX action (or Cmd+C),
     /// reads the result, then restores the original pasteboard.
-    private func performCopyFallback(mouseLocation: CGPoint) {
+    private func performCopyFallback(mouseUpLocation: CGPoint, mouseDownLocation: CGPoint?) {
         // Suppress polling IMMEDIATELY — before any async work — to prevent
         // the poll timer from reading nil via AX and dismissing the popup.
         fallbackCooldownUntil = Date().addingTimeInterval(5.0)
@@ -286,7 +288,7 @@ class SelectionObserver {
                 self.restorePasteboard(backup)
 
                 if let text = copiedText, !text.isEmpty {
-                    self.reportText(text, mouseLocation: mouseLocation, source: "CopyFallback")
+                    self.reportText(text, mouseUpLocation: mouseUpLocation, mouseDownLocation: mouseDownLocation, source: "CopyFallback")
                 } else {
                     // Copy didn't work — clear cooldown
                     self.fallbackCooldownUntil = .distantPast
@@ -394,6 +396,10 @@ class SelectionObserver {
     private func handleSelectionChange(element: AXUIElement) {
         notificationFired = true
 
+        // If we triggered a copy-fallback recently, the menu interaction causes AX
+        // selection notifications to fire with nil text — ignore them during cooldown.
+        if Date() < fallbackCooldownUntil { return }
+
         let systemWide = AXUIElementCreateSystemWide()
         var focusedValue: CFTypeRef?
         let focusResult = AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute as CFString, &focusedValue)
@@ -459,10 +465,26 @@ class SelectionObserver {
         )
     }
 
-    /// Fallback: use the mouse position as approximate selection location.
-    private func mouseLocationBounds(at location: CGPoint? = nil) -> CGRect {
-        let pos = location ?? NSEvent.mouseLocation
-        return CGRect(x: pos.x - 20, y: pos.y, width: 40, height: 4)
+    /// Estimates selection bounds from mouse down + up positions when AX bounds are unavailable.
+    /// Uses the bounding box of the two cursor positions to approximate the selection rect.
+    private func estimatedSelectionBounds(mouseUp: CGPoint, mouseDown: CGPoint?) -> CGRect {
+        guard let down = mouseDown else {
+            // No mouseDown info — small rect just above the cursor
+            return CGRect(x: mouseUp.x - 20, y: mouseUp.y - 4, width: 40, height: 20)
+        }
+        // Build a rect spanning both endpoints (works for single-line and multi-line selections)
+        let minX = min(down.x, mouseUp.x) - 4
+        let maxX = max(down.x, mouseUp.x) + 4
+        let minY = min(down.y, mouseUp.y)
+        let maxY = max(down.y, mouseUp.y)
+        let height = max(maxY - minY, 16)  // At least 16pt so single-line selections have real height
+        return CGRect(x: minX, y: minY, width: max(maxX - minX, 40), height: height)
+    }
+
+    /// Used by polling path (no mouse position context).
+    private func mouseLocationBounds() -> CGRect {
+        let pos = NSEvent.mouseLocation
+        return CGRect(x: pos.x - 20, y: pos.y - 4, width: 40, height: 20)
     }
 
     // MARK: - Teardown
