@@ -1,5 +1,7 @@
 # Highlight Tools
 
+<img src="HighlightTools/Resources/Assets.xcassets/AppIcon.appiconset/icon_256.png" width="80" align="right">
+
 A macOS menubar app that detects text selections and sends them to an LLM. Select text anywhere → a small popup appears with actions like Explain, Translate, Summarize, and Fix Grammar.
 
 > **Demo project** built as a learning exercise, not production software.
